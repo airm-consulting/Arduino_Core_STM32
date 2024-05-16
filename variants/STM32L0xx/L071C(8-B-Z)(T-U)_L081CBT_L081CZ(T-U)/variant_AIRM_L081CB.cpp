@@ -88,7 +88,7 @@ WEAK void SystemClock_Config(void)
   /** Configure LSE Drive Capability
   */
   HAL_PWR_EnableBkUpAccess();
-  __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_LOW);
+  __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_HIGH);
 
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
@@ -130,13 +130,6 @@ WEAK void SystemClock_Config(void)
     Error_Handler();
   }
 
-  /** Enables the Clock Security System
-  */
-  HAL_RCC_EnableCSS();
-
-  /** Enables the Clock Security System
-  */
-  HAL_RCCEx_EnableLSECSS();
 }
 
 #ifdef __cplusplus
