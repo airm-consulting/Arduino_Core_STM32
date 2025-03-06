@@ -15,7 +15,7 @@ from xml.dom.minidom import parse
 script_path = Path(__file__).parent.resolve()
 sys.path.append(str(script_path.parent))
 from utils import copyFile, copyFolder, createFolder, deleteFolder, genSTM32List
-from utils import execute_cmd, getRepoBranchName
+from utils import defaultConfig, execute_cmd, getRepoBranchName
 
 if sys.platform.startswith("win32"):
     from colorama import init
@@ -23,7 +23,6 @@ if sys.platform.startswith("win32"):
     init(autoreset=True)
 
 home = Path.home()
-path_config_filename = "update_config.json"
 
 # GitHub
 gh_st = "https://github.com/STMicroelectronics/"
@@ -85,19 +84,6 @@ out_format = "| {:^12} | {:^7} | {:^8} | {:^8} | {:^1} | {:^8} | {:^8} | {:^1} |
 out_separator = "-" * 70
 
 
-def create_config(config_file_path):
-    global repo_local_path
-
-    # Create a Json file for a better path management
-    print(f"'{config_file_path}' file created. Please check the configuration.")
-    path_config_file = open(config_file_path, "w")
-    path_config_file.write(
-        json.dumps({"REPO_LOCAL_PATH": str(repo_local_path)}, indent=2)
-    )
-    path_config_file.close()
-    exit(1)
-
-
 def checkConfig():
     global repo_local_path
     global hal_dest_path
@@ -107,14 +93,18 @@ def checkConfig():
     global md_CMSIS_path
     global stm32_def
 
-    config_file_path = script_path / path_config_filename
+    config_file_path = script_path / "update_config.json"
     if config_file_path.is_file():
         try:
             config_file = open(config_file_path, "r")
             path_config = json.load(config_file)
-            # Common path
-            repo_local_path = Path(path_config["REPO_LOCAL_PATH"])
             config_file.close()
+            # Common path
+            if "REPO_LOCAL_PATH" not in path_config:
+                path_config["REPO_LOCAL_PATH"] = str(repo_local_path)
+                defaultConfig(config_file_path, path_config)
+            else:
+                repo_local_path = Path(path_config["REPO_LOCAL_PATH"])
             hal_dest_path = repo_local_path / repo_core_name / hal_dest_path
             md_HAL_path = hal_dest_path / md_HAL_path
             cmsis_dest_path = repo_local_path / repo_core_name / cmsis_dest_path
@@ -123,15 +113,15 @@ def checkConfig():
             stm32_def = (
                 repo_local_path
                 / repo_core_name
-                / "cores"
-                / "arduino"
-                / "stm32"
+                / "libraries"
+                / "SrcWrapper"
+                / "inc"
                 / stm32_def
             )
         except IOError:
             print(f"Failed to open {config_file}!")
     else:
-        create_config(config_file_path)
+        defaultConfig(config_file_path, {"REPO_LOCAL_PATH": str(repo_local_path)})
     createFolder(repo_local_path)
 
 
@@ -702,6 +692,7 @@ ble_file_list = [
     "Middlewares/ST/STM32_WPAN/utilities/stm_list.h",
     "Middlewares/ST/STM32_WPAN/LICENSE.md",
     "Projects/P-NUCLEO-WB55.Nucleo/Applications/BLE/BLE_TransparentMode/Core/Inc/app_conf.h",
+    "Projects/P-NUCLEO-WB55.Nucleo/Applications/BLE/BLE_TransparentMode/Core/Inc/utilities_conf.h",
     "Projects/P-NUCLEO-WB55.Nucleo/Applications/BLE/BLE_TransparentMode/STM32_WPAN/Target/"
     + "hw_ipcc.c",
 ]
@@ -847,18 +838,26 @@ def updateCore():
         HAL_updated = False
         CMSIS_updated = False
         openamp_updated = False
-        hal_commit_msg = """system({0}) {3} STM32{0}xx HAL Drivers to v{1}
+        hal_commit_msg = """system({0}) {4} STM32{1}xx HAL Drivers to v{2}
 
-Included in STM32Cube{0} FW {2}""".format(
-            serie, cube_HAL_ver, cube_version, "add" if upargs.add else "update"
+Included in STM32Cube{1} FW {3}""".format(
+            serie.lower(),
+            serie,
+            cube_HAL_ver,
+            cube_version,
+            "add" if upargs.add else "update",
         )
-        cmsis_commit_msg = """system({0}): {3} STM32{0}xx CMSIS Drivers to v{1}
+        cmsis_commit_msg = """system({0}): {4} STM32{1}xx CMSIS Drivers to v{2}
 
-Included in STM32Cube{0} FW {2}""".format(
-            serie, cube_CMSIS_ver, cube_version, "add" if upargs.add else "update"
+Included in STM32Cube{1} FW {3}""".format(
+            serie.lower(),
+            serie,
+            cube_CMSIS_ver,
+            cube_version,
+            "add" if upargs.add else "update",
         )
         wrapper_commit_msg = (
-            f"core({serie}): {'add' if upargs.add else 'update'} wrapped files"
+            f"core({serie.lower()}): {'add' if upargs.add else 'update'} wrapped files"
         )
 
         # Update HAL part if needed
@@ -910,10 +909,10 @@ Included in STM32Cube{0} FW {2}""".format(
 
         if upargs.add:
             system_commit_msg = (
-                f"system({serie}): add STM32{serie}xx system source files"
+                f"system({serie.lower()}): add STM32{serie}xx system source files"
             )
             update_hal_conf_commit_msg = (
-                f"system({serie}): update STM32{serie}xx hal default config"
+                f"system({serie.lower()}): update STM32{serie}xx hal default config"
             )
             update_stm32_def_commit_msg = f"core({serie}): add top HAL include"
             # Create system files
@@ -940,13 +939,13 @@ Included in STM32Cube{0} FW {2}""".format(
             print(
                 "WARNING: OpenAmp MW has been updated, please check whether Arduino implementation:"
             )
-            print("          * cores/arduino/stm32/OpenAMP/mbox_ipcc.h")
-            print("          * cores/arduino/stm32/OpenAMP/mbox_ipcc.c")
-            print("          * cores/arduino/stm32/OpenAMP/rsc_table.h")
-            print("          * cores/arduino/stm32/OpenAMP/rsc_table.c")
-            print("          * cores/arduino/stm32/OpenAMP/openamp.h")
-            print("          * cores/arduino/stm32/OpenAMP/openamp.c")
-            print("          * cores/arduino/stm32/OpenAMP/openamp_conf.h")
+            print("          * libraries/VirtIO/src/mbox_ipcc.h")
+            print("          * libraries/VirtIO/src/mbox_ipcc.c")
+            print("          * libraries/VirtIO/src/rsc_table.h")
+            print("          * libraries/VirtIO/src/rsc_table.c")
+            print("          * libraries/VirtIO/inc/openamp.h")
+            print("          * libraries/VirtIO/src/openamp.c")
+            print("          * libraries/VirtIO/inc/openamp_conf.h")
             print("       should be updated from Cube project:")
             print(
                 "          --> Projects/STM32MP157C-DK2/Applications/OpenAMP/OpenAMP_TTY_echo"

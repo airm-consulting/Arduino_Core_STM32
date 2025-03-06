@@ -44,12 +44,15 @@ extern "C" {
 #define HAL_CRC_MODULE_ENABLED
 #define HAL_DMA_MODULE_ENABLED
 #define HAL_EXTI_MODULE_ENABLED
+#define HAL_FDCAN_MODULE_ENABLED
 #define HAL_FLASH_MODULE_ENABLED
 #define HAL_GPIO_MODULE_ENABLED
+#define HAL_HCD_MODULE_ENABLED
 #define HAL_I2C_MODULE_ENABLED
 #define HAL_I2S_MODULE_ENABLED
 #define HAL_IRDA_MODULE_ENABLED
 #define HAL_IWDG_MODULE_ENABLED
+#define HAL_PCD_MODULE_ENABLED
 #define HAL_PWR_MODULE_ENABLED
 #define HAL_RCC_MODULE_ENABLED
 #define HAL_RTC_MODULE_ENABLED
@@ -119,7 +122,7 @@ extern "C" {
   *        (when HSE is used as system clock source, directly or through the PLL).
   */
 #if !defined  (HSE_VALUE)
-#define HSE_VALUE    (48000000U)            /*!< Value of the External oscillator in Hz */
+#define HSE_VALUE    (24000000U)            /*!< Value of the External oscillator in Hz */
 #endif /* HSE_VALUE */
 
 #if !defined  (HSE_STARTUP_TIMEOUT)
@@ -134,6 +137,18 @@ extern "C" {
 #if !defined  (HSI_VALUE)
 #define HSI_VALUE    (48000000U)           /*!< Value of the Internal oscillator in Hz*/
 #endif /* HSI_VALUE */
+
+/**
+  * @brief Internal High Speed oscillator (HSI48) value for USB FS, SDMMC and RNG.
+  *        This internal oscillator is mainly dedicated to provide a high precision clock to
+  *        the USB peripheral by means of a special Clock Recovery System (CRS) circuitry.
+  *        When the CRS is not used, the HSI48 RC oscillator runs on it default frequency
+  *        which is subject to manufacturing process variations.
+  */
+#if !defined  (HSI48_VALUE)
+#define HSI48_VALUE   48000000U             /*!< Value of the Internal High Speed oscillator for USB FS/SDMMC/RNG in Hz.
+                                                The real value may vary depending on manufacturing process variations.*/
+#endif /* HSI48_VALUE */
 
 /**
   * @brief Internal Low Speed oscillator (LSI) value.
@@ -232,9 +247,17 @@ in voltage and temperature.*/
 #include "stm32c0xx_hal_exti.h"
 #endif /* HAL_EXTI_MODULE_ENABLED */
 
+#ifdef HAL_FDCAN_MODULE_ENABLED
+#include "stm32c0xx_hal_fdcan.h"
+#endif /* HAL_FDCAN_MODULE_ENABLED */
+
 #ifdef HAL_FLASH_MODULE_ENABLED
 #include "stm32c0xx_hal_flash.h"
 #endif /* HAL_FLASH_MODULE_ENABLED */
+
+#ifdef HAL_HCD_MODULE_ENABLED
+#include "stm32c0xx_hal_hcd.h"
+#endif /* HAL_HCD_MODULE_ENABLED */
 
 #ifdef HAL_I2C_MODULE_ENABLED
 #include "stm32c0xx_hal_i2c.h"
@@ -251,6 +274,10 @@ in voltage and temperature.*/
 #ifdef HAL_IWDG_MODULE_ENABLED
 #include "stm32c0xx_hal_iwdg.h"
 #endif /* HAL_IWDG_MODULE_ENABLED */
+
+#ifdef HAL_PCD_MODULE_ENABLED
+#include "stm32c0xx_hal_pcd.h"
+#endif /* HAL_PCD_MODULE_ENABLED */
 
 #ifdef HAL_PWR_MODULE_ENABLED
 #include "stm32c0xx_hal_pwr.h"

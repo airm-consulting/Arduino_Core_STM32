@@ -14,8 +14,17 @@ from xml.dom.minidom import parse, Node
 
 script_path = Path(__file__).parent.resolve()
 sys.path.append(str(script_path.parent))
-from utils import execute_cmd, getRepoBranchName
+from utils import (
+    defaultConfig,
+    deleteFolder,
+    execute_cmd,
+    getRepoBranchName,
+    genSTM32List,
+)
 
+stm32_list = []  # series
+ignored_stm32_list = []  # series
+aggregate_serie_list = []  # series
 mcu_list = []  # 'name'
 io_list = []  # 'PIN','name'
 alt_list = []  # 'PIN','name'
@@ -82,6 +91,7 @@ legacy_hal = {
 }
 # Cube information
 product_line_dict = {}
+svd_dict = {}  # 'name':'svd file'
 
 # format
 # Peripheral
@@ -130,16 +140,6 @@ tim_inst_order = [
 ]
 
 
-def rm_tree(pth: Path):
-    if pth.exists():
-        for child in pth.iterdir():
-            if child.is_file():
-                child.unlink()
-            else:
-                rm_tree(child)
-        pth.rmdir()
-
-
 def update_file(filePath, compile_pattern, subs):
     with open(filePath, "r+", newline="\n") as file:
         fileContents = file.read()
@@ -167,6 +167,12 @@ def parse_mcu_file():
 
     mcu_node = xml_mcu.getElementsByTagName("Mcu")[0]
     mcu_family = mcu_node.attributes["Family"].value
+    # Check if FwLibrary is present in the attributes
+    if "FwLibrary" in mcu_node.attributes:
+        mcu_family = mcu_node.attributes["FwLibrary"].value
+        # split using '_' and kept the lasy part
+        mcu_family = f"STM32{mcu_family.split('_')[-1]}"
+
     if mcu_family.endswith("+"):
         mcu_family = mcu_family[:-1]
     mcu_refname = mcu_node.attributes["RefName"].value
@@ -1214,12 +1220,16 @@ def print_peripheral():
 
 # PinNamesVar.h generation
 def manage_syswkup():
-    syswkup_pins_list = [[] for _ in range(8)]
     if len(syswkup_list) != 0:
-        # H7xx and F446 start from 0
+        # Find the max range of SYS_WKUP
+        max_range = syswkup_list[-1][2].replace("SYS_WKUP", "")
+        max_range = int(max_range) if max_range else 1
+        # F446 start from 0
         base_index = 1
         if syswkup_list[0][2].replace("SYS_WKUP", "") == "0":
             base_index = 0
+            max_range += 1
+        syswkup_pins_list = [[] for _ in range(max_range)]
         for p in syswkup_list:
             num = p[2].replace("SYS_WKUP", "")
             num = int(num) if num else 1
@@ -1229,6 +1239,8 @@ def manage_syswkup():
             else:
                 cmt = f" /* {p[2]} */"
             syswkup_pins_list[num].append([p[0], cmt])
+    else:
+        syswkup_pins_list = []
     return syswkup_pins_list
 
 
@@ -1284,9 +1296,9 @@ def print_pinamevar():
 
 # Variant files generation
 def spi_pins_variant():
-    ss_pin = (
-        ss1_pin
-    ) = ss2_pin = ss3_pin = mosi_pin = miso_pin = sck_pin = "PNUM_NOT_DEFINED"
+    ss_pin = ss1_pin = ss2_pin = ss3_pin = mosi_pin = miso_pin = sck_pin = (
+        "PNUM_NOT_DEFINED"
+    )
 
     # Iterate to find match instance if any
     for mosi in spimosi_list:
@@ -1572,10 +1584,11 @@ def print_variant(generic_list, alt_syswkup_list):
     )
 
 
-def search_product_line(valueline):
+def search_product_line(valueline: str, extra: str) -> str:
     product_line = ""
+    product_line_list = product_line_dict[mcu_family]
     if not valueline.startswith("STM32MP1"):
-        for pline in product_line_dict[mcu_family]:
+        for idx_pline, pline in enumerate(product_line_list):
             vline = valueline
             product_line = pline
             # Remove the 'x' character from pline and
@@ -1588,6 +1601,10 @@ def search_product_line(valueline):
                 else:
                     break
             if pline >= vline:
+                if extra and len(product_line_list) > idx_pline + 1:
+                    if product_line_list[idx_pline + 1] == (product_line + extra):
+                        # Look for the next product line if contains the extra
+                        product_line = product_line_list[idx_pline + 1]
                 break
         else:
             # In case of CMSIS device does not exist
@@ -1614,6 +1631,27 @@ def search_product_line(valueline):
             # In case of CMSIS device does not exist
             product_line = "STM32MP15xx"
     return product_line
+
+
+def parse_stm32targets():
+    global svd_dict
+    xml_stm32targets = parse(str(stm32targets_file))
+    mcu_nodes = xml_stm32targets.getElementsByTagName("mcu")
+    for mcu_node in mcu_nodes:
+        mcu_node_name = mcu_node.getElementsByTagName("name")[0].firstChild.data
+        cpus_node_name = mcu_node.getElementsByTagName("cpus")
+        cpu_node_name = cpus_node_name[0].getElementsByTagName("cpu")
+        svd_node = cpu_node_name[0].getElementsByTagName("svd")
+        svd_file = svd_node[0].getElementsByTagName("name")[0].firstChild.data
+        svd_dict[mcu_node_name] = svd_file
+    xml_stm32targets.unlink()
+
+
+def search_svdfile(mcu_name):
+    svd_file = ""
+    if mcu_name in svd_dict:
+        svd_file = svd_dict[mcu_name]
+    return svd_file
 
 
 def print_boards_entry():
@@ -1661,14 +1699,18 @@ def print_boards_entry():
                     "board": gen_name.upper(),
                     "flash": mcu_flash[index],
                     "ram": mcu_ram[index],
+                    "svd": search_svdfile(f"STM32{gen_name}"),
                 }
             )
         # Search product line for last flash size
+        # Keep the AQ if any
+        subp = pl_regex.search(subf.group(3))
         product_line = search_product_line(
             "STM32"
             + subf.group(1)
             + subf.group(2).split("-")[-1]
-            + package_regex.sub(r"", subf.group(3))
+            + package_regex.sub(r"", subf.group(3)),
+            subp.group(1) if subp and subp.group(1) is not None else "",
         )
     else:
         valueline = mcu_refname
@@ -1678,9 +1720,14 @@ def print_boards_entry():
                 "board": mcu_refname.replace("STM32", "").upper(),
                 "flash": mcu_flash[0],
                 "ram": mcu_ram[0],
+                "svd": search_svdfile(mcu_refname),
             }
         )
-        product_line = search_product_line(package_regex.sub(r"", valueline))
+        subp = pl_regex.search(valueline)
+        product_line = search_product_line(
+            package_regex.sub(r"", valueline),
+            subp.group(1) if subp and subp.group(1) is not None else "",
+        )
 
     gen_entry = mcu_family.replace("STM32", "Gen")
 
@@ -2251,17 +2298,14 @@ def merge_dir(out_temp_path, group_mcu_dir, mcu_family, periph_xml, variant_exp)
 def aggregate_dir():
     # Get mcu_family directories
     out_temp_path = tmp_dir
-    mcu_families = sorted(out_temp_path.glob("STM32*/"))
 
     group_mcu_dir = []
     mcu_dir1_files_list = []
     mcu_dir2_files_list = []
 
     # Compare per family
-    for mcu_family in mcu_families:
-        # Generate only for one family
-        if filtered_family and filtered_family not in mcu_family.name:
-            continue
+    for mcu_family_name in aggregate_serie_list:
+        mcu_family = out_temp_path / f"{mcu_family_name}xx"
         out_family_path = root_dir / "variants" / mcu_family.name
         # Get all mcu_dir
         mcu_dirs = sorted(mcu_family.glob("*/"))
@@ -2361,14 +2405,20 @@ def aggregate_dir():
             dir_str = "Directories" if nb_old > 1 else "Directory"
             print(f"\n{dir_str} not updated for {mcu_family.name}:\n")
             for d in old_dirs:
-                print(f"  - {d.name}")
+                # Check if ldsript.ld file exists in the folder
+                if not (d / "ldscript.ld").exists():
+                    deleteFolder(d)
+                    print(f"  - {d.name} (deleted)")
+                else:
+                    print(f"  - {d.name}")
             print(
                 """
-  --> Please, check if it is due to directory name update (renamed), if true then:
+  --> For each directory not deleted, it requires manual update as it was renamed:
+    - Find new directory name.
     - Move custom boards definition files, if any.
-    - Move linker script(s), if any.
+    - Move linker script(s).
     - Copy 'SystemClock_Config(void)' function to the new generic clock config file.
-  --> Then remove it, update old path in boards.txt
+  --> Then remove it and update old path in boards.txt
      (for custom board(s) as well as generic ones).
 """
             )
@@ -2395,51 +2445,57 @@ def default_cubemxdir():
 
 
 # Config management
-def create_config():
-    # Create a Json file for a better path management
-    try:
-        print(f"Please set your configuration in '{config_filename}' file")
-        config_file = open(config_filename, "w", newline="\n")
-        config_file.write(
-            json.dumps(
-                {
-                    "CUBEMX_DIRECTORY": str(cubemxdir),
-                    "REPO_LOCAL_PATH": str(repo_local_path),
-                },
-                indent=2,
-            )
-        )
-        config_file.close()
-    except IOError:
-        print(f"Failed to open {config_filename}")
-    exit(1)
-
-
-def check_config():
+def checkConfig():
     global cubemxdir
     global repo_local_path
     global repo_path
+    global cubeclt_mcu_path
     default_cubemxdir()
     if config_filename.is_file():
         try:
             config_file = open(config_filename, "r")
-            config = json.load(config_file)
+            path_config = json.load(config_file)
             config_file.close()
 
-            if "REPO_LOCAL_PATH" in config:
-                conf = config["REPO_LOCAL_PATH"]
-                if conf:
-                    if conf != "":
-                        repo_local_path = Path(conf)
-                        repo_path = repo_local_path / repo_name
-            if "CUBEMX_DIRECTORY" in config:
-                conf = config["CUBEMX_DIRECTORY"]
-                if conf:
-                    cubemxdir = Path(conf)
+            if "REPO_LOCAL_PATH" not in path_config:
+                path_config["REPO_LOCAL_PATH"] = str(repo_local_path)
+                defaultConfig(config_filename, path_config)
+            else:
+                conf = path_config["REPO_LOCAL_PATH"]
+                if conf != "":
+                    repo_local_path = Path(conf)
+                    repo_path = repo_local_path / repo_name
+
+            if "CUBEMX_DIRECTORY" not in path_config:
+                path_config["CUBEMX_DIRECTORY"] = str(cubemxdir)
+                defaultConfig(config_filename, path_config)
+            else:
+                cubemxdir = Path(path_config["CUBEMX_DIRECTORY"])
+            if "STM32CUBECLT_PATH" not in path_config:
+                path_config["STM32CUBECLT_PATH"] = str(
+                    "Path to STM32CubeCLT installation directory"
+                )
+                defaultConfig(config_filename, path_config)
+            else:
+                cubeclt_path = Path(path_config["STM32CUBECLT_PATH"])
+            if not cubeclt_path.is_dir():
+                print(f"{cubeclt_path} does not exist!")
+                exit(1)
+            else:
+                cubeclt_mcu_path = cubeclt_path / "STM32target-mcu"
+                if not cubeclt_mcu_path.is_dir():
+                    print(f"{cubeclt_mcu_path} does not exist!")
+                    exit(1)
         except IOError:
             print(f"Failed to open {config_filename}")
     else:
-        create_config()
+        defaultConfig(
+            config_filename,
+            {
+                "CUBEMX_DIRECTORY": str(cubemxdir),
+                "REPO_LOCAL_PATH": str(repo_local_path),
+            },
+        )
 
 
 def manage_repo():
@@ -2493,23 +2549,23 @@ root_dir = script_path.parents[1]
 system_path = root_dir / "system"
 templates_dir = script_path / "templates"
 mcu_family_dir = ""
-filtered_family = ""
-refname_filter = ["STM32MP13", "STM32H7R", "STM32H7S"]
+filtered_serie = ""
 periph_c_filename = "PeripheralPins.c"
 pinvar_h_filename = "PinNamesVar.h"
-config_filename = script_path / "variant_config.json"
+config_filename = script_path / "update_config.json"
 variant_h_filename = "variant_generic.h"
 variant_cpp_filename = "variant_generic.cpp"
 boards_entry_filename = "boards_entry.txt"
 generic_clock_filename = "generic_clock.c"
 repo_local_path = script_path / "repo"
 cubemxdir = Path()
+cubeclt_mcu_path = Path()
 gh_url = "https://github.com/STMicroelectronics/STM32_open_pin_data"
 repo_name = gh_url.rsplit("/", 1)[-1]
 repo_path = repo_local_path / repo_name
 db_release = "Unknown"
 
-check_config()
+checkConfig()
 
 # By default, generate for all mcu xml files description
 parser = argparse.ArgumentParser(
@@ -2543,15 +2599,15 @@ group = parser.add_mutually_exclusive_group()
 group.add_argument(
     "-l",
     "--list",
-    help="list available xml files description in database",
+    help="list available xml files description in database.",
     action="store_true",
 )
 
 group.add_argument(
-    "-f",
-    "--family",
-    metavar="name",
-    help="Generate all files for specified mcu family.",
+    "-s",
+    "--serie",
+    metavar="pattern",
+    help="Generate all files for specified STM32 serie(s) pattern.",
 )
 
 parser.add_argument(
@@ -2565,7 +2621,6 @@ Use STM32CubeMX internal database. Default use GitHub {repo_name} repository.
     action="store_true",
 )
 parser.add_argument(
-    "-s",
     "--skip",
     help=f"Skip {repo_name} clone/fetch",
     action="store_true",
@@ -2600,6 +2655,7 @@ Please check the value set for 'CUBEMX_DIRECTORY' in '{config_filename}' file.""
         PackDescription_item = xml_file.getElementsByTagName("PackDescription")
         for item in PackDescription_item:
             db_release = item.attributes["Release"].value
+        xml_file.unlink()
 
 # Process DB release
 release_regex = r".*(\d+\.\d+\.\d+)$"
@@ -2608,8 +2664,17 @@ if release_match:
     db_release = release_match.group(1)
 print(f"CubeMX DB release {db_release}\n")
 
-if args.family:
-    filtered_family = args.family.upper()
+# Open stm32targets.xml to get svd file
+stm32targets_file = cubeclt_mcu_path / "stm32targets.xml"
+if stm32targets_file.is_file():
+    parse_stm32targets()
+else:
+    print(f"{stm32targets_file} does not exits!")
+    exit(1)
+
+if args.serie:
+    serie = args.serie.upper()
+    serie_pattern = re.compile(rf"STM32({serie})$", re.IGNORECASE)
 # Get all xml files
 mcu_list = sorted(dirMCU.glob("STM32*.xml"))
 
@@ -2619,30 +2684,42 @@ if args.list:
         print(f.name)
     quit()
 
+stm32_list = [f"STM32{stm32}" for stm32 in genSTM32List(system_path / "Drivers")]
+if not stm32_list:
+    print(f"No STM32 series found in {system_path}/Drivers")
+    quit()
+
 # Create the jinja2 environment.
 j2_env = Environment(
     loader=FileSystemLoader(str(templates_dir)), trim_blocks=True, lstrip_blocks=True
 )
 
 # Clean temporary dir
-rm_tree(tmp_dir)
+deleteFolder(tmp_dir)
 
-package_regex = re.compile(r"[\w][\w]([ANPQX])?$")
+pl_regex = re.compile(r"([AQ])$")
+package_regex = re.compile(r"[\w][\w]([ANPQSXZ])?$")
 flash_group_regex = re.compile(r"(.*)\((.*)\)(.*)")
 
 for mcu_file in mcu_list:
     # Open input file
     xml_mcu = parse(str(mcu_file))
     parse_mcu_file()
-
-    # Generate only for one family or supported reference
+    # Generate only for specified pattern series or supported one
+    # Check if mcu_family is supported by the core
     if (
-        filtered_family
-        and filtered_family not in mcu_family
-        or any(skp in mcu_refname for skp in refname_filter)
+        mcu_family not in stm32_list
+        or args.serie
+        and serie_pattern.search(mcu_family) is None
     ):
+        if mcu_family not in ignored_stm32_list and mcu_family not in stm32_list:
+            ignored_stm32_list.append(mcu_family)
         xml_mcu.unlink()
         continue
+
+    # Add mcu family to the list of directory to aggregate
+    if mcu_family not in aggregate_serie_list:
+        aggregate_serie_list.append(mcu_family)
 
     print(f"Generating files for '{mcu_file.name}'...")
     if not gpiofile:
@@ -2706,8 +2783,15 @@ variant_regex = re.compile(r"defined\(ARDUINO_GENERIC_[^\s&|]*\)")
 update_regex = re.compile(r"defined\(ARDUINO_GENERIC_.+\)")
 board_entry_regex = re.compile(r"(Gen.+\..+variant=STM32.+xx/)\S+")
 #                              P     T      E
-mcu_PE_regex = re.compile(r"([\w])([\w])([ANPQSX])?$")
+mcu_PE_regex = re.compile(r"([\w])([\w])([ANPQSXZ])?$")
 aggregate_dir()
 
 # Clean temporary dir
-rm_tree(tmp_dir)
+deleteFolder(tmp_dir)
+
+# Display ignored families
+if ignored_stm32_list:
+    print("\nIgnored families:")
+    for family in ignored_stm32_list:
+        print(f"  - {family}")
+    print("To be supported, series must first be supported by the core.")

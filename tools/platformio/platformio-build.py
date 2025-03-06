@@ -46,15 +46,13 @@ variant = board_config.get(
 )
 series = mcu_type[:7].upper() + "xx"
 variants_dir = (
-    join("$PROJECT_DIR", board_config.get("build.variants_dir"))
+    join(env.subst("$PROJECT_DIR"), board_config.get("build.variants_dir"))
     if board_config.get("build.variants_dir", "")
     else join(FRAMEWORK_DIR, "variants")
 )
 variant_dir = join(variants_dir, variant)
 inc_variant_dir = variant_dir
-if not IS_WINDOWS and not (
-    set(["_idedata", "idedata"]) & set(COMMAND_LINE_TARGETS) and " " not in variant_dir
-):
+if not IS_WINDOWS and not (env.IsIntegrationDump() and " " not in variant_dir):
     inc_variant_dir = variant_dir.replace("(", r"\(").replace(")", r"\)")
 
 upload_protocol = env.subst("$UPLOAD_PROTOCOL")
@@ -109,6 +107,18 @@ def process_usb_configuration(cpp_defines):
                 ("USB_VID", board_config.get("build.hwids", [[0, 0]])[0][0]),
                 ("USB_PID", board_config.get("build.hwids", [[0, 0]])[0][1]),
             ]
+        )
+
+    if any(
+        d in env.Flatten(env.get("CPPDEFINES", []))
+        for d in (
+            "USBD_USE_CDC",
+            "USBD_USE_HID_COMPOSITE",
+        )
+    ):
+        env.BuildSources(
+            join("$BUILD_DIR", "USBDevice"),
+            join(FRAMEWORK_DIR, "libraries", "USBDevice")
         )
 
     if any(f in env["CPPDEFINES"] for f in ("USBD_USE_CDC", "USBD_USE_HID_COMPOSITE")):
@@ -243,6 +253,7 @@ env.Append(
         "ARDUINO_%s" % board_id,
         ("BOARD_NAME", '\\"%s\\"' % board_id),
         "HAL_UART_MODULE_ENABLED",
+        "USE_HAL_DRIVER",
         "USE_FULL_LL_DRIVER",
         (
             "VARIANT_H",
@@ -257,11 +268,10 @@ env.Append(
     CPPPATH=[
         join(FRAMEWORK_DIR, "cores", "arduino", "avr"),
         join(FRAMEWORK_DIR, "cores", "arduino", "stm32"),
-        join(FRAMEWORK_DIR, "cores", "arduino", "stm32", "LL"),
-        join(FRAMEWORK_DIR, "cores", "arduino", "stm32", "usb"),
-        join(FRAMEWORK_DIR, "cores", "arduino", "stm32", "OpenAMP"),
-        join(FRAMEWORK_DIR, "cores", "arduino", "stm32", "usb", "hid"),
-        join(FRAMEWORK_DIR, "cores", "arduino", "stm32", "usb", "cdc"),
+        join(FRAMEWORK_DIR, "libraries", "SrcWrapper", "inc"),
+        join(FRAMEWORK_DIR, "libraries", "SrcWrapper", "inc", "LL"),
+        join(FRAMEWORK_DIR, "libraries", "USBDevice", "inc"),
+        join(FRAMEWORK_DIR, "libraries", "VirtIO", "inc"),
         join(FRAMEWORK_DIR, "system", "Drivers", series + "_HAL_Driver", "Inc"),
         join(FRAMEWORK_DIR, "system", "Drivers", series + "_HAL_Driver", "Src"),
         join(FRAMEWORK_DIR, "system", series),
