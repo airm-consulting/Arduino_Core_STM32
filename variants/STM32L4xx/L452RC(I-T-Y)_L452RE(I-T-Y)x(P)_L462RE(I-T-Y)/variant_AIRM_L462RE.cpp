@@ -12,6 +12,13 @@
  */
 #if defined(ARDUINO_AIRM_L462RE)
 #include "pins_arduino.h"
+#include "Arduino.h"
+#include "PeripheralPins.h"
+const PinMap PinMap_USB[] = {
+  {PA_11, USB, STM_PIN_DATA(STM_MODE_AF_PP, GPIO_NOPULL, GPIO_AF10_USB_FS)}, // USB_DM
+  {PA_12, USB, STM_PIN_DATA(STM_MODE_AF_PP, GPIO_NOPULL, GPIO_AF10_USB_FS)}, // USB_DP
+  {NC,    NP,  0}
+};
 
 // Digital PinName array
 const PinName digitalPin[] = {
